@@ -4,20 +4,18 @@ import time
 from bluepy.btle import UUID, Peripheral,DefaultDelegate
 import threading
 from queue import LifoQueue
-from gpiozero.tones import Tone
 from time import sleep
-#import os
-#os.environ['SDL_AUDIODRIVER'] = 'dsp'
+from utils.note import Note
 
-from pygame import mixer
 
 button_service_uuid = "00001812-0000-1000-8000-00805f9b34fb"
 button_chararcteristics_uuid    = "00002a4d-0000-1000-8000-00805f9b34fb"
 
-lock = threading.Lock()
+glock = threading.Lock()
+ble_lock = threading.Lock()
 
-generator_queue = LifoQueue()
-ble_receiver_queue = LifoQueue()
+generator_queue = []
+ble_receiver_queue = []
 
 results = []
 
@@ -35,6 +33,8 @@ class Sequence:
 
 #matches bits and tones
 #t0, t1, t2
+#TODO: may be i need to separate generation and the sound?
+
 class Matcher(threading.Thread):
     def __init__(self):
         super(Matcher, self).__init__(name="Matcher")
@@ -46,13 +46,20 @@ class Matcher(threading.Thread):
 
     def process(self):
         while True:
-            #print ("matching gqueue={}, blequeue={}".format (generator_queue.qsize(), ble_receiver_queue.qsize()))
-            if ble_receiver_queue.empty == False:
-                gitem = generator_queue.pop()
-                ritem = ble_receiver_queue.pop()
-                diff = gitem.ts-ritem.ts
-                print ("difference {}, gqueue={}, blequeue={}".format (diff, generator_queue.qsize(), ble_receiver_queue.qsize()))
-                sleep (0.1)
+            with ble_lock:
+                if len(ble_receiver_queue) > 0:
+                    ritem = ble_receiver_queue.pop()
+                    with glock:
+                        if len(generator_queue) > 0:
+                            gitem = generator_queue.pop()
+                            diff = gitem.ts-ritem.ts
+                        else:
+                            diff = 9999999
+
+                    print ("difference {}, gqueue={}, blequeue={}".format (diff/1000000, len(generator_queue), len(ble_receiver_queue)))
+            #else:
+            #    print ("matching gqueue={}, blequeue={}".format (generator_queue.qsize(), ble_receiver_queue.qsize()))
+        sleep(0.5)
 
 
 #generates sounds as per defined order
@@ -64,8 +71,9 @@ class BitGenerator(threading.Thread):
     def __init__(self, rate):
         super(BitGenerator, self).__init__(name="Generator")
         self.rate=rate
-        mixer.init()
-        self.sound = mixer.Sound('sounds/bottle_pop_2.wav')
+        self.beep = self.rate*0.33
+        self.pause = self.rate-self.beep
+        
 
     def run(self):
         print ("creating thread {}".format (threading.currentThread().getName()))
@@ -73,10 +81,26 @@ class BitGenerator(threading.Thread):
     
     def generate(self):
         while True:
-            item = self.GItem(int(time.time() * 1000))
-            generator_queue.put(item)
-            self.sound.play()
-            #sleep (self.rate)
+            with glock:
+                ts1 = int(time.time_ns())
+                if len (generator_queue) == 0:
+                    item = self.GItem(ts1)
+                    generator_queue.append(item)
+                    next_item = self.GItem(ts1 + self.rate*1000000000)
+                    generator_queue.append(next_item)
+                else: 
+                    if len (generator_queue) > 1:
+                        generator_queue.pop(0)
+                        next_item = self.GItem(ts1 + self.rate*1000000000)
+                        generator_queue.append(next_item)
+
+            tone = Note(500).play(-1)
+            time.sleep(self.beep)
+            tone.stop()
+            time.sleep(self.pause)
+            ts2 = int(time.time_ns())
+            #print (ts2-ts1)
+            
 
 class BLEProcessor(threading.Thread):
     class BLEItem:
@@ -93,7 +117,18 @@ class BLEProcessor(threading.Thread):
         self.subscribe()
 
     def subscribe(self):
-        p = Peripheral(self.device)
+        
+        connected = False
+        while connected == False:
+            try:
+                print("connecting to ", self.device)
+                p = Peripheral(self.device)
+            except Exception as e:
+                print (e)
+                sleep (2)
+            else:
+                connected = True
+            
         p.setDelegate( MyDelegate(self.device) )
 
         #Get ButtonService
@@ -134,16 +169,34 @@ class MyDelegate(DefaultDelegate):
         self.count = 0
       
     #func is caled on notifications
-    def handleNotification(self, cHandle, data):
-        ts = int(time.time() * 1000)
-        print (str(ts) + " Notification from Device:" + self.device + ", Handle: 0x" + format(cHandle,'02X') + " Count" + str(self.count))
+    def handleNotification2(self, cHandle, data):
+        ts = int(time.time_ns())
+        #print (str(ts) + " Notification from Device:" + self.device + ", Handle: 0x" + format(cHandle,'02X') + " Count" + str(self.count))
         if self.count == 0:
-            ble_receiver_queue.put(BLEProcessor.BLEItem(ts, self.device))
+            with ble_lock:
+                if len(ble_receiver_queue) > 0:
+                    print ("ble queue is not empty")
+                    ble_receiver_queue.pop()
+
+                ble_receiver_queue.append(BLEProcessor.BLEItem(ts, self.device))
             self.count = self.count + 1
         else:
          if self.count > 0:
             self.count = 0
-        
+    
+    def handleNotification(self, cHandle, data):
+        ts = int(time.time_ns())
+        #print (str(ts) + " Notification from Device:" + self.device + ", Handle: 0x" + format(cHandle,'02X') + " Count" + str(self.count))
+        if self.count == 0:
+            if len(generator_queue) > 0:
+                gitem = generator_queue.pop(0)
+                diff = ts-gitem.ts
+                print ("difference {}, gqueue={}".format (diff/1000000, len(generator_queue)))
+
+            self.count = self.count + 1
+        else:
+         if self.count > 0:
+            self.count = 0
 
 if len(sys.argv) != 2:
   print ("Fatal, must pass device address:", sys.argv[0], "<device address="">")
@@ -157,10 +210,10 @@ for d in sys.argv[1].split(','):
 
 matcher = Matcher()
 matcher.setDaemon(True)
-matcher.start()
-thread_list.append(matcher)
+#matcher.start()
+#thread_list.append(matcher)
 
-generator = BitGenerator(1)
+generator = BitGenerator(1.5)
 generator.setDaemon(True)
 generator.start()
 thread_list.append(generator)
