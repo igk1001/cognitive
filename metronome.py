@@ -263,13 +263,13 @@ def init():
         thread.start()
 
     
-    @app.route('/')
-    def index():
-        return render_template('index.html')
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-    @app.route('/chart-data')
-    def get_responce_data():
-        def generate_random_data():
+@app.route('/chart-data')
+def get_response_data():
+    def generate_response():
             while True:
                 with results_lock:
                     while results.empty() == False: 
@@ -281,11 +281,11 @@ def init():
                         yield f"data:{json_data}\n\n"
                 time.sleep(1)
 
-        return Response(generate_random_data(), mimetype='text/event-stream')
+    return Response(generate_response(), mimetype='text/event-stream')
 
-    @app.route('/devices')
-    def list_devices():
-        pass
+@app.route('/devices')
+def list_devices():
+    pass
 
 
 if __name__ == "__main__":
