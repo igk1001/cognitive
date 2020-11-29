@@ -103,7 +103,15 @@ class BitGenerator(threading.Thread):
         self.beep = self.rate*0.33
         self.pause = self.rate-self.beep
         
-
+    def init(self, ts):
+        ts1 = ts
+        ts2 = ts1 + self.rate*1000000000
+        
+        item = self.GItem(ts1)
+        generator_queue.append(item)
+        next_item = self.GItem(ts2)
+        generator_queue.append(next_item)
+        
     def run(self):
         print ("creating thread {}".format (threading.currentThread().getName()))
         self.generate()
@@ -113,23 +121,20 @@ class BitGenerator(threading.Thread):
         while True:
             cycle=cycle+1
             with glock:
-                ts1 = int(time.time_ns())
+                ts = int(time.time_ns())
+                
                 if len (generator_queue) == 0:
-                    item = self.GItem(ts1)
-                    generator_queue.append(item)
-                    next_item = self.GItem(ts1 + self.rate*1000000000)
-                    generator_queue.append(next_item)
-                else: 
-                    if len (generator_queue) > 1:
+                    self.init(ts)
+                
+                if generator_queue[0].ts < ts: # outdated timestamp
+                    while len (generator_queue) > 0:
                         generator_queue.pop(0)
-                        next_item = self.GItem(ts1 + self.rate*1000000000)
-                        generator_queue.append(next_item)
-            
-            
+                    self.init(ts)    
+                                
             if cycle % 2 == 0:
                 frequency = HZ
             else:
-                frequency = HZ * 2
+                frequency = HZ
           
             tone = Note(frequency).play(-1)
             time.sleep(self.beep)
@@ -207,20 +212,30 @@ class MyDelegate(DefaultDelegate):
         self.device=params
         #hack to suppress duplicate notifications
         self.count = 0
-      
+
     
     def handleNotification(self, cHandle, data):
-        ts = int(time.time_ns())
         #print (str(ts) + " Notification from Device:" + self.device + ", Handle: 0x" + format(cHandle,'02X') + " Count" + str(self.count))
+        diff = 0
+        expected_ts = int(time.time_ns())
+
         if self.count == 0:
             with glock:
+                click_ts = int(time.time_ns())
                 if len(generator_queue) > 0:
-                    gitem = generator_queue.pop(0)
-                    diff = ts-gitem.ts
-                    print ("difference {}, gqueue={}".format (diff/1000000, len(generator_queue)))
-                    res = self.BLEItem(ts, diff, self.device)
-                    results.put(res)
+                    expected_ts = generator_queue[0].ts
+                    diff = click_ts-expected_ts
+                    print ("difference {}, click={}, expected={}, gqueue={}".format (round(diff/1000000,0), round(click_ts/1000000,0), round(expected_ts/1000000,0), len(generator_queue)))
+                    
+                    # remove event for the item that already in progress
+                    # keep the item if button pressed too early
+                    #if diff >= 0: 
+                    generator_queue.pop(0)
 
+            with results_lock:
+                res = self.BLEItem(expected_ts, diff, self.device)
+                results.put(res)
+     
             self.count = self.count + 1
         else:
          if self.count > 0:
@@ -234,11 +249,6 @@ def init():
         devices.append(d.strip())
 
     print ("devices=", devices)
-
-                #matcher = Matcher()
-                #matcher.setDaemon(True)
-                #matcher.start()
-                #thread_list.append(matcher)
 
     generator = BitGenerator(1.5)
     generator.setDaemon(True)
@@ -261,12 +271,14 @@ def init():
     def get_responce_data():
         def generate_random_data():
             while True:
-                item = results.get()
-                dt = datetime.fromtimestamp(item.time // 1000000000)
-                json_data = json.dumps(
-                            {'time': dt.strftime('%Y-%m-%d %H:%M:%S'), 'value': item.value/1000000})
-                results.task_done()
-                yield f"data:{json_data}\n\n"
+                with results_lock:
+                    while results.empty() == False: 
+                        item = results.get()
+                        dt = datetime.fromtimestamp(item.time // 1000000000) #ns to sec
+                        json_data = json.dumps(
+                                    {'time': dt.strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0)}) #ns to ms
+                        results.task_done()
+                        yield f"data:{json_data}\n\n"
                 time.sleep(1)
 
         return Response(generate_random_data(), mimetype='text/event-stream')
@@ -280,8 +292,6 @@ if __name__ == "__main__":
     if len(sys.argv) != 2:
         print ("Fatal, must pass device address:", sys.argv[0], "<device address="">")
         quit()
-
-    #server = MyServer()
 
     app.run(debug=True, threaded=True, host='0.0.0.0', port=5001, use_reloader=False)
 

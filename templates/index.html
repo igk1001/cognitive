@@ -62,6 +62,7 @@
                     }],
                     yAxes: [{
                         display: true,
+                        type: 'linear',
                         scaleLabel: {
                             display: true,
                             labelString: 'Value'
@@ -73,8 +74,9 @@
 
         var chartColors = {
             red: 'rgb(255, 99, 132)',
-            blue: 'rgb(54, 162, 235)',
-            green: 'rgb(75, 192, 192)'
+            blue: 'rgb(0, 0, 235)',
+            green: 'rgb(0, 128, 0)',
+            yellow: 'rgb(255, 255, 0)'
         };
 
         const context = document.getElementById('canvas').getContext('2d');
@@ -88,11 +90,14 @@
             if (config.data.labels.length === 20) {
                 config.data.labels.shift();
                 config.data.datasets[0].data.shift();
+                config.data.datasets[0].backgroundColor.shift();
             }
             config.data.labels.push(data.time);
             config.data.datasets[0].data.push(data.value);
-            if (data.value > 800) {
+            if (Math.abs(data.value) > 500) {
                 config.data.datasets[0].backgroundColor.push (chartColors.red);
+            } else if (Math.abs(data.value) > 100) {
+                config.data.datasets[0].backgroundColor.push (chartColors.yellow);
             } else {
                 config.data.datasets[0].backgroundColor.push (chartColors.green);
             }
