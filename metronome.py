@@ -12,9 +12,9 @@ import json
 import urllib.parse
 import requests
 import random
+import string
 
 from flask import Flask, Response, jsonify, render_template
-from flask_classful import FlaskView, route
 
 import logging
 
@@ -47,13 +47,29 @@ thread_list = []
 class Admin:
     pass
 
-class Move:
-    pass
+    class Device:
+        def __init__(self, device, name, status):
+            self.device = device
+            self.name = name
+            self.status = status
+
+    class Move:
+        def __init__(self, device, rate, duration):
+            self.name = device.name
+            self.rate = rate
+            self.duration = duration
+
 
 #defines desired metronome sequence
 # Ex. press left hand twice, right hand once,  left hand twice, etc
+#AABC
 class Sequence:
-    pass
+    def __init__():
+        self.moves = []
+    
+    def addMove(move):
+        self.moves.append(move)
+
 
 #matches bits and tones
 #t0, t1, t2
@@ -126,6 +142,8 @@ class BitGenerator(threading.Thread):
                 if len (generator_queue) == 0:
                     self.init(ts)
                 
+                #TODO: better to remove outdated timestamps on a click, 
+                #TODO: then we can decide if it't too late or too early (whatever is smaller)
                 if generator_queue[0].ts < ts: # outdated timestamp
                     while len (generator_queue) > 0:
                         generator_queue.pop(0)
@@ -142,9 +160,42 @@ class BitGenerator(threading.Thread):
             time.sleep(self.pause)
             ts2 = int(time.time_ns())
             #print (ts2-ts1)
+
+
+class BitGeneratorEx(threading.Thread):
+    class GItem:
+        def __init__(self, ts):
+            self.ts = ts
+
+    def __init__(self, sequence):
+        super(BitGenerator, self).__init__(name="Generator")
+        self.sequence = sequence
+        
+    def init(self, ts):
+        pass 
+       
+       
+        
+    def run(self):
+        print ("creating thread {}".format (threading.currentThread().getName()))
+        self.generate()
+    
+    def generate(self):
+        cycle = 0
+        while True:
+            for m in self.sequence.moves:
+                ts = int(time.time_ns())
+                tone = Note(m.rate).play(-1)
+                time.sleep(m.duration*0.7)
+                tone.stop()
+                time.sleep(m.duration*0.3)
             
 
+
+deviceMap = {}
+
 class BLEProcessor(threading.Thread):
+
 
     def __init__(self, device):
         super(BLEProcessor, self).__init__(name=device)
@@ -153,6 +204,13 @@ class BLEProcessor(threading.Thread):
     def run(self):
         print ("# creating thread {} for {}".format (threading.currentThread().getName(), self.device))
         self.subscribe()
+
+    def assignDeviceName(self, device):
+        index = len (deviceMap)
+        #name = string.ascii_uppercase [index ]
+        name = str(index+1)
+        deviceMap[device] = name
+        return name
 
     def subscribe(self):
         
@@ -166,8 +224,9 @@ class BLEProcessor(threading.Thread):
                 sleep (2)
             else:
                 connected = True
-            
-        p.setDelegate( MyDelegate(self.device) )
+                
+
+        p.setDelegate( MyDelegate(self.assignDeviceName(self.device)) )
 
         #Get ButtonService
         ButtonService=p.getServiceByUUID(button_service_uuid)
@@ -225,7 +284,7 @@ class MyDelegate(DefaultDelegate):
                 if len(generator_queue) > 0:
                     expected_ts = generator_queue[0].ts
                     diff = click_ts-expected_ts
-                    print ("difference {}, click={}, expected={}, gqueue={}".format (round(diff/1000000,0), round(click_ts/1000000,0), round(expected_ts/1000000,0), len(generator_queue)))
+                    print ("device {}, difference {}, click={}, expected={}, gqueue={}".format (self.device, round(diff/1000000,0), round(click_ts/1000000,0), round(expected_ts/1000000,0), len(generator_queue)))
                     
                     # remove event for the item that already in progress
                     # keep the item if button pressed too early
@@ -255,14 +314,24 @@ def init():
     generator.start()
     thread_list.append(generator)
 
-
     for d in devices:
         thread = BLEProcessor(d)
         thread.setDaemon(True)
         thread_list.append (thread)
         thread.start()
 
+def createSequence():
+    d1 = Device('71:35:20:99:09:EC', 'LH', '')
+    d2 = Device('71:35:20:9b:bb:14', 'RH', '')
     
+    seq = Sequence()
+    
+    seq.addMove(Move(d1, 500, 60))
+    seq.addMove(Move(d1, 500, 60))
+    seq.addMove(Move(d2, 500, 60))
+
+    return seq
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -276,7 +345,7 @@ def get_response_data():
                         item = results.get()
                         dt = datetime.fromtimestamp(item.time // 1000000000) #ns to sec
                         json_data = json.dumps(
-                                    {'time': dt.strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0)}) #ns to ms
+                                    {'time': dt.strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': int(item.device)}) #ns to ms
                         results.task_done()
                         yield f"data:{json_data}\n\n"
                 time.sleep(1)
