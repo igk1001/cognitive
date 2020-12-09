@@ -103,30 +103,26 @@ class Matcher(threading.Thread):
         sleep(0.5)
 
 
-#generates sounds as per defined order
-#TODO: can we use generators to produce values on a fly:
-#TODO: explore futures - schedule a task that cancelled if event didnt happen in time 
-
-
 class BitGenerator(threading.Thread):
     class GItem:
         def __init__(self, ts):
             self.ts = ts
 
     def __init__(self, rate):
-        super(BitGenerator, self).__init__(name="Generator")
+        super(BitGeneratorEx, self).__init__(name="GeneratorEx")
         self.rate=rate
         self.beep = self.rate*0.33
         self.pause = self.rate-self.beep
         
-    def init(self, ts):
-        ts1 = ts
+    def init(self):
+        ts1 = int(time.time_ns())
         ts2 = ts1 + self.rate*1000000000
         
         item = self.GItem(ts1)
         generator_queue.append(item)
         next_item = self.GItem(ts2)
         generator_queue.append(next_item)
+       
         
     def run(self):
         print ("creating thread {}".format (threading.currentThread().getName()))
@@ -137,17 +133,14 @@ class BitGenerator(threading.Thread):
         while True:
             cycle=cycle+1
             with glock:
-                ts = int(time.time_ns())
-                
                 if len (generator_queue) == 0:
-                    self.init(ts)
-                
-                #TODO: better to remove outdated timestamps on a click, 
-                #TODO: then we can decide if it't too late or too early (whatever is smaller)
-                if generator_queue[0].ts < ts: # outdated timestamp
-                    while len (generator_queue) > 0:
-                        generator_queue.pop(0)
-                    self.init(ts)    
+                    self.init()
+                else:
+                    ts1 = int(time.time_ns())
+                    ts2 = ts1 + self.rate*1000000000
+        
+                    item = self.GItem(ts2)
+                    generator_queue.append(item)
                                 
             if cycle % 2 == 0:
                 frequency = HZ
@@ -158,39 +151,7 @@ class BitGenerator(threading.Thread):
             time.sleep(self.beep)
             tone.stop()
             time.sleep(self.pause)
-            ts2 = int(time.time_ns())
-            #print (ts2-ts1)
-
-
-class BitGeneratorEx(threading.Thread):
-    class GItem:
-        def __init__(self, ts):
-            self.ts = ts
-
-    def __init__(self, sequence):
-        super(BitGenerator, self).__init__(name="Generator")
-        self.sequence = sequence
-        
-    def init(self, ts):
-        pass 
-       
-       
-        
-    def run(self):
-        print ("creating thread {}".format (threading.currentThread().getName()))
-        self.generate()
-    
-    def generate(self):
-        cycle = 0
-        while True:
-            for m in self.sequence.moves:
-                ts = int(time.time_ns())
-                tone = Note(m.rate).play(-1)
-                time.sleep(m.duration*0.7)
-                tone.stop()
-                time.sleep(m.duration*0.3)
             
-
 
 deviceMap = {}
 
@@ -273,33 +234,47 @@ class MyDelegate(DefaultDelegate):
         self.count = 0
 
     
-    def handleNotification(self, cHandle, data):
-        #print (str(ts) + " Notification from Device:" + self.device + ", Handle: 0x" + format(cHandle,'02X') + " Count" + str(self.count))
-        diff = 0
-        expected_ts = int(time.time_ns())
 
+# algorithm:
+# 1. generator adds timestamps to the end of the list T3 -> T2 -> T1, etc where T3>T2>T1
+# 2. upon receiving a callback at a time Tcb find closest match to the generated timestamp starting from the end
+# Example:
+# vector = [1,2,3]
+# pre-conditions: vector always has current T and next in a sequence
+# input 2.7
+# output 
+#  2.7 - 3 = -.3
+#  2.7 - 2 = 0.7
+#  min (abs(-.3), abs(.7) = 0.3
+#  return -.3
+
+    def handleNotification(self, cHandle, data):
+        diff = 0
+        click_ts = int(time.time_ns())
+        
         if self.count == 0:
             with glock:
-                click_ts = int(time.time_ns())
-                if len(generator_queue) > 0:
-                    expected_ts = generator_queue[0].ts
-                    diff = click_ts-expected_ts
-                    print ("device {}, difference {}, click={}, expected={}, gqueue={}".format (self.device, round(diff/1000000,0), round(click_ts/1000000,0), round(expected_ts/1000000,0), len(generator_queue)))
-                    
-                    # remove event for the item that already in progress
-                    # keep the item if button pressed too early
-                    #if diff >= 0: 
-                    generator_queue.pop(0)
+                qsize = len(generator_queue)
+                # find timestamp 
+                expected1_ts = generator_queue[qsize-1].ts
+                diff1 = click_ts-expected1_ts
+
+                expected2_ts = generator_queue[qsize-2].ts
+                diff2 = click_ts-expected2_ts
+               
+
+                diff = diff2 if abs (diff1) > abs (diff2) else diff1
+                print ("device {}, diff1={}, diff2={}, diff {}, click={}, expected1={}, expected2={}, gqueue={}".format (self.device, round(diff1/1000000,0), round(diff2/1000000,0), round(diff/1000000,0), round(click_ts/1000000000,0), round(expected1_ts/1000000000,0), round(expected2_ts/1000000000,0), qsize))
+            
 
             with results_lock:
-                res = self.BLEItem(expected_ts, diff, self.device)
+                res = self.BLEItem(click_ts, diff, self.device)
                 results.put(res)
-     
-            self.count = self.count + 1
+        
+                self.count = self.count + 1
         else:
-         if self.count > 0:
-            self.count = 0
-
+            if self.count > 0:
+                self.count = 0
 
 @app.before_first_request
 def init():
@@ -309,7 +284,7 @@ def init():
 
     print ("devices=", devices)
 
-    generator = BitGenerator(1.5)
+    generator = BitGeneratorEx(1.5)
     generator.setDaemon(True)
     generator.start()
     thread_list.append(generator)
@@ -348,7 +323,7 @@ def get_response_data():
                                     {'time': dt.strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': int(item.device)}) #ns to ms
                         results.task_done()
                         yield f"data:{json_data}\n\n"
-                time.sleep(1)
+                time.sleep(0.5)
 
     return Response(generate_response(), mimetype='text/event-stream')
 
