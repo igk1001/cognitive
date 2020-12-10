@@ -38,7 +38,9 @@ results_lock = threading.Lock()
 
 generator_queue = []
 ble_receiver_queue = []
-results = queue.Queue()
+#results = queue.Queue()
+results = []
+
 devices = []
 thread_list = []
 
@@ -71,37 +73,6 @@ class Sequence:
         self.moves.append(move)
 
 
-#matches bits and tones
-#t0, t1, t2
-#TODO: may be i need to separate generation and the sound?
-
-class Matcher(threading.Thread):
-    def __init__(self):
-        super(Matcher, self).__init__(name="Matcher")
-        self.dd = 1
-
-    def run(self):
-        print ("creating thread {}".format (threading.currentThread().getName()))
-        self.process()
-
-    def process(self):
-        while True:
-            with ble_lock:
-                if len(ble_receiver_queue) > 0:
-                    ritem = ble_receiver_queue.pop()
-                    with glock:
-                        if len(generator_queue) > 0:
-                            gitem = generator_queue.pop()
-                            diff = gitem.ts-ritem.ts
-                        else:
-                            diff = 9999999
-
-                    print ("difference {}, gqueue={}, blequeue={}".format (diff/1000000, len(generator_queue), len(ble_receiver_queue)))
-                    results 
-            #else:
-            #    print ("matching gqueue={}, blequeue={}".format (generator_queue.qsize(), ble_receiver_queue.qsize()))
-        sleep(0.5)
-
 
 class BitGenerator(threading.Thread):
     class GItem:
@@ -109,7 +80,7 @@ class BitGenerator(threading.Thread):
             self.ts = ts
 
     def __init__(self, rate):
-        super(BitGeneratorEx, self).__init__(name="GeneratorEx")
+        super(BitGenerator, self).__init__(name="Generator")
         self.rate=rate
         self.beep = self.rate*0.33
         self.pause = self.rate-self.beep
@@ -269,7 +240,7 @@ class MyDelegate(DefaultDelegate):
 
             with results_lock:
                 res = self.BLEItem(click_ts, diff, self.device)
-                results.put(res)
+                results.append(res)
         
                 self.count = self.count + 1
         else:
@@ -284,7 +255,7 @@ def init():
 
     print ("devices=", devices)
 
-    generator = BitGeneratorEx(1.5)
+    generator = BitGenerator(1.5)
     generator.setDaemon(True)
     generator.start()
     thread_list.append(generator)
@@ -311,19 +282,29 @@ def createSequence():
 def index():
     return render_template('index.html')
 
+@app.route('/raw-data')
+def get_raw_data():
+    def generate_response():
+        with results_lock:
+            items = [{'time': datetime.fromtimestamp(item.time // 1000000000).strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': int(item.device)} for item in results]
+            return json.dumps(items)
+
+    return Response(generate_response(), mimetype='application/json')
+
 @app.route('/chart-data')
 def get_response_data():
     def generate_response():
-            while True:
-                with results_lock:
-                    while results.empty() == False: 
-                        item = results.get()
-                        dt = datetime.fromtimestamp(item.time // 1000000000) #ns to sec
-                        json_data = json.dumps(
-                                    {'time': dt.strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': int(item.device)}) #ns to ms
-                        results.task_done()
-                        yield f"data:{json_data}\n\n"
-                time.sleep(0.5)
+        index = cursor = 0
+        while True:
+            with results_lock:
+                length = len(results)
+                for cursor in range (index, length): 
+                    item = results[cursor]
+                    dt = datetime.fromtimestamp(item.time // 1000000000) #ns to sec
+                    json_data = json.dumps({'time': dt.strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': int(item.device)}) #ns to ms
+                    yield f"data:{json_data}\n\n"
+                index = length
+            time.sleep(0.1)
 
     return Response(generate_response(), mimetype='text/event-stream')
 
