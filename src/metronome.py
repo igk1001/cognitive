@@ -322,3 +322,32 @@ if __name__ == "__main__":
 
     for thread in thread_list:
         thread.join()
+
+
+def set_axis_style(ax, labels):
+    ax.get_xaxis().set_tick_params(direction='out')
+    ax.xaxis.set_ticks_position('bottom')
+    ax.set_xticks(np.arange(1, len(labels) + 1))
+    ax.set_xticklabels(labels)
+    ax.set_xlim(0.25, len(labels) + 0.75)
+    ax.set_xlabel('Device #')
+
+import requests
+import json
+response = requests.get("http://localhost:5001/raw-data")
+#print(response.json())
+data = response.json()
+values = set(map(lambda x:x['device'], data))
+newlist = [[y['value'] for y in data if y['device']==x] for x in values]
+#print(newlist)
+
+fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(9, 4), sharey=True)
+
+ax1.set_title('Responce comparison:' + str() )
+ax1.set_ylabel('Observed values (ms)')
+ax1.violinplot(newlist)
+
+labels = values
+set_axis_style(ax1, labels)
+plt.subplots_adjust(bottom=0.15, wspace=0.05)
+plt.show()
