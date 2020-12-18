@@ -110,7 +110,7 @@
             }
             config.data.labels.push(data.time);
             config.data.datasets[0].data.push(data.value);
-            config.data.datasets[0].backgroundColor.push (chartBackgroundColorsArray[data.device-1]);
+            config.data.datasets[0].backgroundColor.push (chartBackgroundColorsArray[data.device]);
 
 
             if (Math.abs(data.value) > 500) {

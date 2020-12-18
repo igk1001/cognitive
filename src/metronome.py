@@ -7,6 +7,7 @@ import queue
 from time import sleep
 from datetime import datetime
 from utils.note import Note
+from utils.analytics import get_matching_sequences
 import argparse
 import json
 import urllib.parse
@@ -14,7 +15,7 @@ import requests
 import random
 import string
 
-from flask import Flask, Response, jsonify, render_template
+from flask import Flask, Response, jsonify, render_template, request
 
 import logging
 
@@ -139,8 +140,8 @@ class BLEProcessor(threading.Thread):
 
     def assignDeviceName(self, device):
         index = len (deviceMap)
-        #name = string.ascii_uppercase [index ]
-        name = str(index+1)
+        name = string.ascii_uppercase [index ]
+        #name = str(index+1)
         deviceMap[device] = name
         return name
 
@@ -279,11 +280,32 @@ def createSequence():
     return seq
 
 
+# Accepts pattern as a parameter. ex. http://localhost:5001/sequence?pattern=AABC  
+# returns data in a following format [['AX-AX-BX-CX', 3], ['AX-BX-CX', 1], ["BX-CX", 2]]
+# needs to be ordered from longest sequence to shortest
 @app.route('/sequence')
-def index2():
-    #df = pd.read_csv('data/visit-sequences.csv')
-    data = [['account-account-account-end',500], ['bra-account-account-home-account-account',434], ['account-account-account-home-account-end',83]]
-    return render_template('sequence-chart.html', data=data)
+def sequence():
+    pattern = request.args.get('pattern')
+    with results_lock:
+        output = []
+        items = [item.device for item in results]
+        sequence = ''.join(items)
+        match = get_matching_sequences(pattern,sequence)
+        wordfreq = [match.count(p) for p in match]
+        freq_dict = dict(list(zip(match,wordfreq)))
+        appender = lambda x: x + 'X'
+
+        items = freq_dict.items()
+        sorted_items = sorted(items, key=lambda x: len(x[0]), reverse=True)
+
+        for key, value in sorted_items:
+            seq=map(appender, list(key)) # hack to fix issue with single char not working
+            vec = ['-'.join(seq),value]
+            output.append (vec)
+
+        #output = sorted(output, key=lambda x: x[1])
+        print ('output=', json.dumps(output))
+        return render_template('sequence-chart.html', data=output)
 
 @app.route('/')
 def index():
@@ -293,7 +315,7 @@ def index():
 def get_raw_data():
     def generate_response():
         with results_lock:
-            items = [{'time': datetime.fromtimestamp(item.time // 1000000000).strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': int(item.device)} for item in results]
+            items = [{'time': datetime.fromtimestamp(item.time // 1000000000).strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': item.device} for item in results]
             return json.dumps(items)
 
     return Response(generate_response(), mimetype='application/json')
@@ -308,7 +330,7 @@ def get_response_data():
                 for cursor in range (index, length): 
                     item = results[cursor]
                     dt = datetime.fromtimestamp(item.time // 1000000000) #ns to sec
-                    json_data = json.dumps({'time': dt.strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': int(item.device)}) #ns to ms
+                    json_data = json.dumps({'time': dt.strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': ord(item.device)-ord('A')}) #ns to ms
                     yield f"data:{json_data}\n\n"
                 index = length
             time.sleep(0.1)

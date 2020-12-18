@@ -11,10 +11,10 @@ var b = {
 
 // Mapping of step names to colors.
 var colors = {
-  "home": "#5687d1",
-  "product": "#7b615c",
-  "search": "#de783b",
-  "account": "#6ab975",
+  "AX": "#5687d1",
+  "BX": "#7b615c",
+  "CX": "#de783b",
+  "DX": "#6ab975",
   "other": "#a173d1",
   "end": "#bbbbbb"
 };
@@ -42,11 +42,6 @@ var arc = d3.arc()
 
 // Use d3.text and d3.csvParseRows so that we do not need to have a header
 // row, and can receive the csv as an array of arrays.
-//d3.text("/home/pi/dev/cognitive/data/visit-sequences.csv", function(text) {
-//  var csv = d3.csvParseRows(text);
-//  var json = buildHierarchy(csv);
-//  createVisualization(json);
-//});
 
 function processData(data) {
   //console.log(data);
