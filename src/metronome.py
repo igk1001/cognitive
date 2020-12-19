@@ -83,7 +83,7 @@ class BitGenerator(threading.Thread):
     def __init__(self, rate):
         super(BitGenerator, self).__init__(name="Generator")
         self.rate=rate
-        self.beep = self.rate*0.33
+        self.beep = self.rate*0.2
         self.pause = self.rate-self.beep
         
     def init(self):
@@ -109,7 +109,7 @@ class BitGenerator(threading.Thread):
                     self.init()
                 else:
                     ts1 = int(time.time_ns())
-                    ts2 = ts1 + self.rate*1000000000
+                    ts2 = ts1 + self.rate*1000000000 #TODO - logic doesnt look correct, should probably get interval from a prior beep?
         
                     item = self.GItem(ts2)
                     generator_queue.append(item)
@@ -119,6 +119,7 @@ class BitGenerator(threading.Thread):
             else:
                 frequency = HZ
           
+          #TODO -   move beeps to a different thread or a timer that executed  
             tone = Note(frequency).play(-1)
             time.sleep(self.beep)
             tone.stop()
@@ -224,14 +225,16 @@ class MyDelegate(DefaultDelegate):
         diff = 0
         click_ts = int(time.time_ns())
         
+        adjustment_ns = 150000000
+
         if self.count == 0:
             with glock:
                 qsize = len(generator_queue)
                 # find timestamp 
-                expected1_ts = generator_queue[qsize-1].ts
+                expected1_ts = generator_queue[qsize-1].ts + adjustment_ns
                 diff1 = click_ts-expected1_ts
 
-                expected2_ts = generator_queue[qsize-2].ts
+                expected2_ts = generator_queue[qsize-2].ts + adjustment_ns
                 diff2 = click_ts-expected2_ts
                
 
