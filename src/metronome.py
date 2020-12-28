@@ -330,6 +330,7 @@ def average_basic():
             df = pd.DataFrame({'device': devices, 'response_delay_in_ms': latency})
             print(df)
             res = df.groupby('device').agg({'device':"count", 'response_delay_in_ms':"mean"})
+            res = res.rename(columns={"device": "count", "response_delay_in_ms": "average response latency in ms"})
             print(res)
             return res.to_json()
 
