@@ -14,6 +14,7 @@ import urllib.parse
 import requests
 import random
 import string
+import pandas as pd
 
 from flask import Flask, Response, jsonify, render_template, request
 
@@ -102,6 +103,7 @@ class BitGenerator(threading.Thread):
     
     def generate(self):
         cycle = 0
+        ts2 = 0
         while True:
             cycle=cycle+1
             with glock:
@@ -109,6 +111,10 @@ class BitGenerator(threading.Thread):
                     self.init()
                 else:
                     ts1 = int(time.time_ns())
+                    #TODO check difference between expected (last item) and an actual during generation
+                    qsize = len(generator_queue)
+                    diff  = generator_queue[qsize-1].ts - ts1
+                    print ("*** diff1 (ms)=", diff/1000000)
                     ts2 = ts1 + self.rate*1000000000 #TODO - logic doesnt look correct, should probably get interval from a prior beep?
         
                     item = self.GItem(ts2)
@@ -124,8 +130,9 @@ class BitGenerator(threading.Thread):
             time.sleep(self.beep)
             tone.stop()
             time.sleep(self.pause)
-            
-
+            ts_end = int(time.time_ns())
+            diff2  = ts2 - ts_end
+            print ("*** diff2 (ms)=", diff2/1000000)
 deviceMap = {}
 
 class BLEProcessor(threading.Thread):
@@ -225,7 +232,7 @@ class MyDelegate(DefaultDelegate):
         diff = 0
         click_ts = int(time.time_ns())
         
-        adjustment_ns = 150000000
+        adjustment_ns = 0
 
         if self.count == 0:
             with glock:
@@ -295,6 +302,7 @@ def sequence():
         sequence = ''.join(items)
         match = get_matching_sequences(pattern,sequence)
         wordfreq = [match.count(p) for p in match]
+        #print (wordfreq)
         freq_dict = dict(list(zip(match,wordfreq)))
         appender = lambda x: x + 'X'
 
@@ -309,6 +317,23 @@ def sequence():
         #output = sorted(output, key=lambda x: x[1])
         print ('output=', json.dumps(output))
         return render_template('sequence-chart.html', data=output)
+  
+# returns averages per button
+@app.route('/average_basic')
+def average_basic():
+    def generate_response():
+        with results_lock:
+            output = []
+            devices = [item.device for item in results]
+            latency = [abs(item.value/1000000) for item in results]
+        
+            df = pd.DataFrame({'device': devices, 'response_delay_in_ms': latency})
+            print(df)
+            res = df.groupby('device').agg({'device':"count", 'response_delay_in_ms':"mean"})
+            print(res)
+            return res.to_json()
+
+    return Response(generate_response(), mimetype='application/json')          
 
 @app.route('/')
 def index():
