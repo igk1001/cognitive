@@ -81,6 +81,7 @@ class Device:
     def __init__(self, id, name, status):
         self.id = id
         self.name = name
+        self.label = ''
         self.status = status
         self.ts =  int(time.time_ns())
     
@@ -151,15 +152,18 @@ class BitGenerator(threading.Thread):
 class BLEProcessor(threading.Thread):
 
 
-    def __init__(self, device):
-        super(BLEProcessor, self).__init__(name=device)
-        self.device=device
+    def __init__(self, id):
+        super(BLEProcessor, self).__init__(name=id)
+        self.id=id
 
     def run(self):
-        print ("# creating thread {} for {}".format (threading.currentThread().getName(), self.device))
+        print ("# creating thread {} for {}".format (threading.currentThread().getName(), self.id))
+        self.device = Device( self.id, self.assignDeviceName(), Device.Status.DISCONNECTED )
+        deviceMap[self.id] = self.device
+
         self.subscribe()
 
-    def assignDeviceName(self, device):
+    def assignDeviceName(self):
         index = len (deviceMap)
         name = string.ascii_uppercase [index ]
         #name = str(index+1)
@@ -169,13 +173,11 @@ class BLEProcessor(threading.Thread):
 
         while True:
             connected = False
-            d = Device( self.device, self.assignDeviceName(self.device), Device.Status.DISCONNECTED )
-            deviceMap[self.device] = d
-
+           
             while connected == False:
                 try:
-                    print("connecting to LBE: ", self.device)
-                    p = Peripheral(self.device)
+                    print("connecting to LBE: ", self.id)
+                    p = Peripheral(self.id)
                 except Exception as e:
                     #print (e)
                     sleep (2)
@@ -183,13 +185,13 @@ class BLEProcessor(threading.Thread):
                     connected = True
                     
 
-            p.setDelegate( MyDelegate(d) )
+            p.setDelegate( MyDelegate(self.device) )
 
             #Get ButtonService
             ButtonService=p.getServiceByUUID(button_service_uuid)
 
-            print ("Connected to " + self.device)
-            dd = deviceMap[self.device]
+            print ("Connected to " + self.id)
+            dd = deviceMap[self.id]
             dd.status = Device.Status.CONNECTED
 
             # Get The Button-Characteristics
@@ -209,7 +211,7 @@ class BLEProcessor(threading.Thread):
                 hButtonCCC=desriptor.handle
                 p.writeCharacteristic(hButtonCCC, struct.pack('<bb', 0x01, 0x00))
 
-            print ("Notification is turned on for " + self.device)
+            print ("Notification is turned on for ", self.device)
 
             while True:
                 try:
@@ -217,6 +219,8 @@ class BLEProcessor(threading.Thread):
                         continue
                 except BTLEDisconnectError as e:
                     print (e)
+                    dd = deviceMap[self.id]
+                    dd.status = Device.Status.DISCONNECTED
                     break # reconect
             
 class MyDelegate(DefaultDelegate):
@@ -398,8 +402,22 @@ def set_device_name():
 
 @app.route('/devices')
 def list_devices():
-    return Response(json.dumps(deviceMap, indent=4, cls=DeviceEncoder), mimetype='application/json')
-    
+    return Response(json.dumps(list(deviceMap.values()), indent=4, cls=DeviceEncoder), mimetype='application/json')
+
+@app.route('/admin')
+def admin():
+    output = json.dumps(list(deviceMap.values()), indent=4, cls=DeviceEncoder)
+    print(output)
+    return render_template('admin.html', data=output)
+
+@app.route('/analytics')
+def analytics():
+    with results_lock:
+        items = [{'time': datetime.fromtimestamp(item.time // 1000000000).strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': item.device} for item in results]
+ 
+    print (items)
+    return render_template('analytics.html', data=items)
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print ("Fatal, must pass device address:", sys.argv[0], "<device address="">")
