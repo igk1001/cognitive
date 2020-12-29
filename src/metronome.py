@@ -1,7 +1,7 @@
 import struct
 import sys
 import time
-from bluepy.btle import UUID, Peripheral,DefaultDelegate
+from bluepy.btle import UUID, Peripheral,DefaultDelegate, BTLEDisconnectError
 import threading
 import queue
 from time import sleep
@@ -15,8 +15,9 @@ import requests
 import random
 import string
 import pandas as pd
-
+from enum import Enum
 from flask import Flask, Response, jsonify, render_template, request
+from json import JSONEncoder
 
 import logging
 
@@ -45,17 +46,11 @@ results = []
 
 devices = []
 thread_list = []
-
+deviceMap = {}
 
 #Admin APIs to manage a service
 class Admin:
     pass
-
-    class Device:
-        def __init__(self, device, name, status):
-            self.device = device
-            self.name = name
-            self.status = status
 
     class Move:
         def __init__(self, device, rate, duration):
@@ -75,6 +70,24 @@ class Sequence:
         self.moves.append(move)
 
 
+class Device:
+      
+    class Status(str, Enum):
+        DISCONNECTED = "DISCONNECTED"
+        FAILED = "FAILED"
+        CONNECTED = "CONNECTED"
+
+
+    def __init__(self, id, name, status):
+        self.id = id
+        self.name = name
+        self.status = status
+        self.ts =  int(time.time_ns())
+    
+
+class DeviceEncoder(JSONEncoder):
+        def default(self, o):
+            return o.__dict__
 
 class BitGenerator(threading.Thread):
     class GItem:
@@ -133,7 +146,7 @@ class BitGenerator(threading.Thread):
             ts_end = int(time.time_ns())
             diff2  = ts2 - ts_end
             print ("*** diff2 (ms)=", diff2/1000000)
-deviceMap = {}
+
 
 class BLEProcessor(threading.Thread):
 
@@ -150,54 +163,62 @@ class BLEProcessor(threading.Thread):
         index = len (deviceMap)
         name = string.ascii_uppercase [index ]
         #name = str(index+1)
-        deviceMap[device] = name
         return name
 
     def subscribe(self):
-        
-        connected = False
-        while connected == False:
-            try:
-                print("connecting to LBE: ", self.device)
-                p = Peripheral(self.device)
-            except Exception as e:
-                #print (e)
-                sleep (2)
-            else:
-                connected = True
-                
-
-        p.setDelegate( MyDelegate(self.assignDeviceName(self.device)) )
-
-        #Get ButtonService
-        ButtonService=p.getServiceByUUID(button_service_uuid)
-
-        print ("Connected to " + self.device)
-
-        # Get The Button-Characteristics
-        # for ch in ButtonService.getCharacteristics():
-        #    print (ch.propertiesToString(), ch.uuid)
-
-        ButtonC=ButtonService.getCharacteristics(button_chararcteristics_uuid)[0]
-    
-        #Get The handle tf the  Button-Characteristics
-        hButtonC=ButtonC.getHandle()
-        # Search and get Get The Button-Characteristics "property" (UUID-0x1124 Human Interface Device (HID)))
-        #  wich is located in a handle in the range defined by the boundries of the ButtonService
-        for desriptor in p.getDescriptors(hButtonC,0xFFFF):  # The handle range should be read from the services 
-            #print ("descr", desriptor)
-            # if (desriptor.uuid == 0x2902):                   #      but is not done due to a Bluez/BluePy bug :(     
-            #print ("Button1 Client Characteristic Configuration found at handle 0x"+ format(desriptor.handle,"02X"))
-            hButtonCCC=desriptor.handle
-            p.writeCharacteristic(hButtonCCC, struct.pack('<bb', 0x01, 0x00))
-
-        print ("Notification is turned on for " + self.device)
 
         while True:
-            if p.waitForNotifications(1.0):
-            # handleNotification() was called
-                continue
+            connected = False
+            d = Device( self.device, self.assignDeviceName(self.device), Device.Status.DISCONNECTED )
+            deviceMap[self.device] = d
 
+            while connected == False:
+                try:
+                    print("connecting to LBE: ", self.device)
+                    p = Peripheral(self.device)
+                except Exception as e:
+                    #print (e)
+                    sleep (2)
+                else:
+                    connected = True
+                    
+
+            p.setDelegate( MyDelegate(d) )
+
+            #Get ButtonService
+            ButtonService=p.getServiceByUUID(button_service_uuid)
+
+            print ("Connected to " + self.device)
+            dd = deviceMap[self.device]
+            dd.status = Device.Status.CONNECTED
+
+            # Get The Button-Characteristics
+            # for ch in ButtonService.getCharacteristics():
+            #    print (ch.propertiesToString(), ch.uuid)
+
+            ButtonC=ButtonService.getCharacteristics(button_chararcteristics_uuid)[0]
+        
+            #Get The handle tf the  Button-Characteristics
+            hButtonC=ButtonC.getHandle()
+            # Search and get Get The Button-Characteristics "property" (UUID-0x1124 Human Interface Device (HID)))
+            #  wich is located in a handle in the range defined by the boundries of the ButtonService
+            for desriptor in p.getDescriptors(hButtonC,0xFFFF):  # The handle range should be read from the services 
+                #print ("descr", desriptor)
+                # if (desriptor.uuid == 0x2902):                   #      but is not done due to a Bluez/BluePy bug :(     
+                #print ("Button1 Client Characteristic Configuration found at handle 0x"+ format(desriptor.handle,"02X"))
+                hButtonCCC=desriptor.handle
+                p.writeCharacteristic(hButtonCCC, struct.pack('<bb', 0x01, 0x00))
+
+            print ("Notification is turned on for " + self.device)
+
+            while True:
+                try:
+                    if p.waitForNotifications(1.0):
+                        continue
+                except BTLEDisconnectError as e:
+                    print (e)
+                    break # reconect
+            
 class MyDelegate(DefaultDelegate):
 
     class BLEItem:
@@ -207,9 +228,9 @@ class MyDelegate(DefaultDelegate):
             self.device = device
 
     #Constructor (run once on startup)  
-    def __init__(self, params):
+    def __init__(self, device):
         DefaultDelegate.__init__(self)
-        self.device=params
+        self.device=device
         #hack to suppress duplicate notifications
         self.count = 0
 
@@ -246,11 +267,11 @@ class MyDelegate(DefaultDelegate):
                
 
                 diff = diff2 if abs (diff1) > abs (diff2) else diff1
-                print ("device {}, diff1={}, diff2={}, diff {}, click={}, expected1={}, expected2={}, gqueue={}".format (self.device, round(diff1/1000000,0), round(diff2/1000000,0), round(diff/1000000,0), round(click_ts/1000000000,0), round(expected1_ts/1000000000,0), round(expected2_ts/1000000000,0), qsize))
+                print ("device {}, diff1={}, diff2={}, diff {}, click={}, expected1={}, expected2={}, gqueue={}".format (self.device.name, round(diff1/1000000,0), round(diff2/1000000,0), round(diff/1000000,0), round(click_ts/1000000000,0), round(expected1_ts/1000000000,0), round(expected2_ts/1000000000,0), qsize))
             
 
             with results_lock:
-                res = self.BLEItem(click_ts, diff, self.device)
+                res = self.BLEItem(click_ts, diff, self.device.name)
                 results.append(res)
         
                 self.count = self.count + 1
@@ -317,7 +338,8 @@ def sequence():
         #output = sorted(output, key=lambda x: x[1])
         print ('output=', json.dumps(output))
         return render_template('sequence-chart.html', data=output)
-  
+
+
 # returns averages per button
 @app.route('/average_basic')
 def average_basic():
@@ -366,11 +388,18 @@ def get_response_data():
 
     return Response(generate_response(), mimetype='text/event-stream')
 
-@app.route('/devices')
-def list_devices():
+@app.route('/pattern')
+def set_pattern():
     pass
 
+@app.route('/device')
+def set_device_name():
+    pass
 
+@app.route('/devices')
+def list_devices():
+    return Response(json.dumps(deviceMap, indent=4, cls=DeviceEncoder), mimetype='application/json')
+    
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print ("Fatal, must pass device address:", sys.argv[0], "<device address="">")
