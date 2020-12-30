@@ -1,0 +1,31 @@
+devices:
+  - id: 71:35:20:99:09:EC
+    name: A
+    label: LH
+    color:
+      name: silver
+      code: #C0C0C0
+  - id: 71:35:20:9b:bb:14
+    name: B
+    label: RH
+    color:
+      name: violet
+      code: #EE82EE
+  - id: 71:35:20:9a:7d:3c
+    name: C
+    label: LF
+    color:
+      name: turquoise
+      code: #40E0D0
+  - id: 71:35:20:99:0c:ac
+    name: D
+    label: RF
+    color:
+      name: slategray
+      code: #708090
+  - id: 71:35:20:99:2b:7c
+    name: E
+    label: 
+    color:
+      name: beige
+      code: #F5F5DC
