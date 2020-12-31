@@ -22,7 +22,7 @@ function processData(json) {
 function ConvertToCSV(objArray) {
     var array = typeof objArray != 'object' ? JSON.parse(objArray) : objArray;
     var str = '';
-    str += 'time,value,device' + '\r\n';
+    str += 'time,value,device,label' + '\r\n';
 
     for (var i = 0; i < array.length; i++) {
         var line = '';
@@ -48,7 +48,7 @@ function render(data) {
   // Build and Show the X scale. It is a band scale like for a boxplot: each group has an dedicated RANGE on the axis. This range has a length of x.bandwidth
   var x = d3.scaleBand()
     .range([ 0, width ])
-    .domain(["A", "B", "C", "D", "E"])
+    .domain(["LH", "RH", "LF", "RF"])
     .padding(0.05)     // This is important: it is the space between 2 groups. 0 means no padding. 1 is the maximum.
   svg.append("g")
     .attr("transform", "translate(0," + height + ")")
@@ -62,7 +62,7 @@ function render(data) {
 
   // Compute the binning for each group of the dataset
   var sumstat = d3.nest()  // nest function allows to group the calculation per level of a factor
-    .key(function(d) { return d.device;})
+    .key(function(d) { return d.label;})
     .rollup(function(d) {   // For each key..
       input = d.map(function(g) { return g.value;})    // Keep the variable called Sepal_Length
       bins = histogram(input)   // And compute the binning on it.
@@ -114,7 +114,7 @@ function render(data) {
     .data(data)
     .enter()
     .append("circle")
-      .attr("cx", function(d){return(x(d.device) + x.bandwidth()/2 - Math.random()*jitterWidth )})
+      .attr("cx", function(d){return(x(d.label) + x.bandwidth()/2 - Math.random()*jitterWidth )})
       .attr("cy", function(d){return(y(d.value))})
       .attr("r", 5)
       .style("fill", function(d){ return(myColor(d.value))})

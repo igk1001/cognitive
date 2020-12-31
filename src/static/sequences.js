@@ -11,10 +11,10 @@ var b = {
 
 // Mapping of step names to colors.
 var colors = {
-  "AX": "#5687d1",
-  "BX": "#7b615c",
-  "CX": "#de783b",
-  "DX": "#6ab975",
+  "LH": "#D2B48C",
+  "RH": "#EE82EE",
+  "LF": "#40E0D0",
+  "RF": "#708090",
   "other": "#a173d1",
   "end": "#bbbbbb"
 };
@@ -44,7 +44,7 @@ var arc = d3.arc()
 // row, and can receive the csv as an array of arrays.
 
 function processData(data) {
-  //console.log(data);
+  console.log(data);
   var json = buildHierarchy(data)
   createVisualization(json);
 }

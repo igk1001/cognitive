@@ -22,8 +22,7 @@
       <input type="checkbox" id="togglelegend"> Legend<br/>
       <div id="legend" style="visibility: hidden;"></div>
     </div>
-    <script type="text/javascript" 
-      src="{{ url_for('static', filename='sequences.js') }}"
+    <script type="text/javascript" src="{{ url_for('static', filename='sequences.js') }}">
     </script>
     <script type="text/javascript">
       var data = {{ data | safe }}
@@ -32,6 +31,6 @@
     <script type="text/javascript">
       // Hack to make this example display correctly in an iframe on bl.ocks.org
       d3.select(self.frameElement).style("height", "700px");
-  </script> 
+    </script> 
   </body>
 </html>

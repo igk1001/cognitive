@@ -18,6 +18,7 @@ import pandas as pd
 from enum import Enum
 from flask import Flask, Response, jsonify, render_template, request
 from json import JSONEncoder
+import yaml
 
 import logging
 
@@ -70,6 +71,19 @@ class Sequence:
         self.moves.append(move)
 
 
+
+def createSequence():
+    d1 = Device('71:35:20:99:09:EC', 'LH', '')
+    d2 = Device('71:35:20:9b:bb:14', 'RH', '')
+    
+    seq = Sequence()
+    
+    seq.addMove(Move(d1, 500, 60))
+    seq.addMove(Move(d1, 500, 60))
+    seq.addMove(Move(d2, 500, 60))
+
+    return seq
+
 class Device:
       
     class Status(str, Enum):
@@ -78,12 +92,14 @@ class Device:
         CONNECTED = "CONNECTED"
 
 
-    def __init__(self, id, name, status):
+    def __init__(self, id, name, label, color, color_code, status):
         self.id = id
         self.name = name
-        self.label = ''
+        self.label = label
+        self.color = color
+        self.color_code = color_code
         self.status = status
-        self.ts =  int(time.time_ns())
+        self.last_updated =  int(time.time_ns())
     
 
 class DeviceEncoder(JSONEncoder):
@@ -152,14 +168,14 @@ class BitGenerator(threading.Thread):
 class BLEProcessor(threading.Thread):
 
 
-    def __init__(self, id):
-        super(BLEProcessor, self).__init__(name=id)
-        self.id=id
+    def __init__(self, device):
+        super(BLEProcessor, self).__init__(name=device.id)
+        self.device=device
 
     def run(self):
-        print ("# creating thread {} for {}".format (threading.currentThread().getName(), self.id))
-        self.device = Device( self.id, self.assignDeviceName(), Device.Status.DISCONNECTED )
-        deviceMap[self.id] = self.device
+        print ("# creating thread {} for {}".format (threading.currentThread().getName(), self.device))
+        #self.device = Device( self.id, self.assignDeviceName(), Device.Status.DISCONNECTED )
+        #deviceMap[self.id] = self.device
 
         self.subscribe()
 
@@ -176,8 +192,8 @@ class BLEProcessor(threading.Thread):
            
             while connected == False:
                 try:
-                    print("connecting to LBE: ", self.id)
-                    p = Peripheral(self.id)
+                    print("connecting to LBE: ", self.device.id)
+                    p = Peripheral(self.device.id)
                 except Exception as e:
                     #print (e)
                     sleep (2)
@@ -190,8 +206,8 @@ class BLEProcessor(threading.Thread):
             #Get ButtonService
             ButtonService=p.getServiceByUUID(button_service_uuid)
 
-            print ("Connected to " + self.id)
-            dd = deviceMap[self.id]
+            print ("Connected to " + self.device.id)
+            dd = deviceMap[self.device.id]
             dd.status = Device.Status.CONNECTED
 
             # Get The Button-Characteristics
@@ -219,17 +235,19 @@ class BLEProcessor(threading.Thread):
                         continue
                 except BTLEDisconnectError as e:
                     print (e)
-                    dd = deviceMap[self.id]
+                    dd = deviceMap[self.device.id]
                     dd.status = Device.Status.DISCONNECTED
                     break # reconect
             
 class MyDelegate(DefaultDelegate):
 
     class BLEItem:
-        def __init__(self, ts, value, device):
+        def __init__(self, ts, value, device, label, color):
             self.time = ts
             self.value = value
             self.device = device
+            self.label = label
+            self.color = color
 
     #Constructor (run once on startup)  
     def __init__(self, device):
@@ -275,7 +293,7 @@ class MyDelegate(DefaultDelegate):
             
 
             with results_lock:
-                res = self.BLEItem(click_ts, diff, self.device.name)
+                res = self.BLEItem(click_ts, diff, self.device.name, self.device.label, self.device.color_code)
                 results.append(res)
         
                 self.count = self.count + 1
@@ -283,36 +301,31 @@ class MyDelegate(DefaultDelegate):
             if self.count > 0:
                 self.count = 0
 
+deviceNameMap = {}
+
 @app.before_first_request
 def init():
-    print ("*** in init")
-    for d in sys.argv[1].split(','):
-        devices.append(d.strip())
-
-    print ("devices=", devices)
+    
+    with open('conf/settings.yml') as f:
+        docs = yaml.load(f, Loader=yaml.FullLoader)
+        #print(docs)
+        devices = docs ['devices']
+        for d in devices:
+            device = Device( d['id'], d['name'], d['label'], d['color']['name'], d['color']['code'], Device.Status.DISCONNECTED )
+            print (d)
+            deviceMap[d['id']] = device
+            deviceNameMap[d['name']] = d['label']
 
     generator = BitGenerator(1.5)
     generator.setDaemon(True)
     generator.start()
     thread_list.append(generator)
 
-    for d in devices:
+    for d in deviceMap.values():
         thread = BLEProcessor(d)
         thread.setDaemon(True)
         thread_list.append (thread)
         thread.start()
-
-def createSequence():
-    d1 = Device('71:35:20:99:09:EC', 'LH', '')
-    d2 = Device('71:35:20:9b:bb:14', 'RH', '')
-    
-    seq = Sequence()
-    
-    seq.addMove(Move(d1, 500, 60))
-    seq.addMove(Move(d1, 500, 60))
-    seq.addMove(Move(d2, 500, 60))
-
-    return seq
 
 
 # Accepts pattern as a parameter. ex. http://localhost:5001/sequence?pattern=AABC  
@@ -329,13 +342,15 @@ def sequence():
         wordfreq = [match.count(p) for p in match]
         #print (wordfreq)
         freq_dict = dict(list(zip(match,wordfreq)))
-        appender = lambda x: x + 'X'
+        lookup = lambda x: deviceNameMap[x]
 
         items = freq_dict.items()
         sorted_items = sorted(items, key=lambda x: len(x[0]), reverse=True)
 
+        print (sorted_items)
+
         for key, value in sorted_items:
-            seq=map(appender, list(key)) # hack to fix issue with single char not working
+            seq=map(lookup, list(key)) # hack to fix issue with single char not working
             vec = ['-'.join(seq),value]
             output.append (vec)
 
@@ -370,7 +385,7 @@ def index():
 def get_raw_data():
     def generate_response():
         with results_lock:
-            items = [{'time': datetime.fromtimestamp(item.time // 1000000000).strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': item.device} for item in results]
+            items = [{'time': datetime.fromtimestamp(item.time // 1000000000).strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': item.device, 'color': item.color, 'label': item.label} for item in results]
             return json.dumps(items)
 
     return Response(generate_response(), mimetype='application/json')
@@ -385,7 +400,7 @@ def get_response_data():
                 for cursor in range (index, length): 
                     item = results[cursor]
                     dt = datetime.fromtimestamp(item.time // 1000000000) #ns to sec
-                    json_data = json.dumps({'time': dt.strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': ord(item.device)-ord('A')}) #ns to ms
+                    json_data = json.dumps({'time': dt.strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': item.device, 'color': item.color, 'label': item.label}) #ns to ms
                     yield f"data:{json_data}\n\n"
                 index = length
             time.sleep(0.1)
@@ -413,16 +428,16 @@ def admin():
 @app.route('/analytics')
 def analytics():
     with results_lock:
-        items = [{'time': datetime.fromtimestamp(item.time // 1000000000).strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': item.device} for item in results]
+        items = [{'time': datetime.fromtimestamp(item.time // 1000000000).strftime('%Y-%m-%d %H:%M:%S'), 'value': round(item.value/1000000,0), 'device': item.device, 'label': item.label } for item in results]
  
     print (items)
     return render_template('analytics.html', data=items)
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print ("Fatal, must pass device address:", sys.argv[0], "<device address="">")
-        quit()
-    
+    #if len(sys.argv) != 2:
+    #    print ("Fatal, must pass device address:", sys.argv[0], "<device address="">")
+    #    quit()
+
     app.static_folder = 'static'
     app.run(debug=True, threaded=True, host='0.0.0.0', port=5001, use_reloader=False)
 
